@@ -576,6 +576,9 @@ void syncCommand(client *c) {
      * the client about already issued commands. We need a fresh reply
      * buffer registering the differences between the BGSAVE and the current
      * dataset, so that we can copy to other slaves if needed. */
+    // 这考虑到同时有多个slave与master进行同步, 如果当前第一个slave的输出缓冲区数据+BGSAVE产生的RDB = 完整的dataset
+    // 那么第二个到来的slave其实不必再次生产RDB文件, 然后把第一个slave的输出缓冲区内存copy过来就可以维持和master之前的数据完整性了(不会遗留什么数据)
+    // 正常来说不会出现这种情况, 因为slave与master之前的握手过程是按顺序来的, 进入下一个阶段前, 确保把上一个阶段的数据读完才进入下一阶段
     if (clientHasPendingReplies(c)) {
         addReplyError(c,"SYNC and PSYNC are invalid with pending output");
         return;
@@ -623,6 +626,9 @@ void syncCommand(client *c) {
         anetDisableTcpNoDelay(NULL, c->fd); /* Non critical if it fails. */
     c->repldbfd = -1;
     c->flags |= CLIENT_SLAVE;
+    // 接收到slave的全量同步请求后, 把当前slave加入到master的slave列表中(正常写命令执行完后需要向aof，slaves进行传播,
+    // 当repl_backlog或者slaves不为空时, 传播就可以得到进行, 试想一下如果是第一个slave发起全量同步请求, 由于接下来就进行RDB操作
+    // 所以传递给slave的数据完整性不会有什么问题)
     listAddNodeTail(server.slaves,c);
 
     /* CASE 1: BGSAVE is in progress, with disk target. */
@@ -637,6 +643,7 @@ void syncCommand(client *c) {
         listIter li;
 
         listRewind(server.slaves,&li);
+        // 直到找到一个正在等待BGSAVE完成的slave
         while((ln = listNext(&li))) {
             slave = ln->value;
             if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_END) break;
@@ -814,6 +821,7 @@ void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
         server.stat_net_output_bytes += nwritten;
+        // 也许一次并写不完
         sdsrange(slave->replpreamble,nwritten,-1);
         if (sdslen(slave->replpreamble) == 0) {
             sdsfree(slave->replpreamble);
@@ -912,8 +920,10 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type) {
                     continue;
                 }
                 slave->repldboff = 0;
+                // 获取RDB文件的大小
                 slave->repldbsize = buf.st_size;
                 slave->replstate = SLAVE_STATE_SEND_BULK;
+                // 再发送RDB之前, 先发送replpreamble
                 slave->replpreamble = sdscatprintf(sdsempty(),"$%lld\r\n",
                     (unsigned long long) slave->repldbsize);
 
@@ -1321,6 +1331,8 @@ int slaveTryPartialResynchronization(int fd, int read_reply) {
         return PSYNC_WAIT_REPLY;
     }
 
+    // 至此结束，与master的握手过程已经结束，接下来就是读取master发送过来的RDB数据流，通过readSyncBulkPayload完成读取
+    // 前面已经删除了AE_WRITABLE事件，这里删除AE_READABLE，接下来会重新注册新的读事件，不过处理函数是readSyncBulkPayload
     aeDeleteFileEvent(server.el,fd,AE_READABLE);
 
     if (!strncmp(reply,"+FULLRESYNC",11)) {
@@ -1413,6 +1425,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
         serverLog(LL_NOTICE,"Non blocking connect for SYNC fired the event.");
         /* Delete the writable event so that the readable event remains
          * registered and we can wait for the PONG reply. */
+        // 删除写事件，接下来与master的握手请求都是同步发送的，读响应是异步事件+同步读取(简单协议,+)
         aeDeleteFileEvent(server.el,fd,AE_WRITABLE);
         server.repl_state = REPL_STATE_RECEIVE_PONG;
         /* Send the PING, don't check for errors at all, we have the timeout
@@ -1662,7 +1675,7 @@ int connectWithMaster(void) {
             strerror(errno));
         return C_ERR;
     }
-
+    // 监听与master之前的读写事件
     if (aeCreateFileEvent(server.el,fd,AE_READABLE|AE_WRITABLE,syncWithMaster,NULL) ==
             AE_ERR)
     {
@@ -2248,6 +2261,8 @@ void replicationCron(void) {
     }
 
     /* Bulk transfer I/O timeout? */
+    // 对于slave来说, 这个时间要加上master端产生RDB文件的时间, 因为在这段期间内没有任何复制相关的
+    // 通信, 也就是说server.repl_transfer_lastio不会发生变化(如果是socket方式, 则无需考虑)
     if (server.masterhost && server.repl_state == REPL_STATE_TRANSFER &&
         (time(NULL)-server.repl_transfer_lastio) > server.repl_timeout)
     {
@@ -2275,6 +2290,8 @@ void replicationCron(void) {
     /* Send ACK to master from time to time.
      * Note that we do not send periodic acks to masters that don't
      * support PSYNC and replication offsets. */
+    // 每秒向master发送一次ack(包含当前slave已经处理的offset), 在master节点上info replication中
+    // slave节点的复制offset信息就是来自于这里
     if (server.masterhost && server.master &&
         !(server.master->flags & CLIENT_PRE_PSYNC))
         replicationSendAck();

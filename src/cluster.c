@@ -4562,6 +4562,7 @@ migrateCachedSocket* migrateGetSocket(client *c, robj *host, robj *port, long ti
     name = sdscatlen(name,host->ptr,sdslen(host->ptr));
     name = sdscatlen(name,":",1);
     name = sdscatlen(name,port->ptr,sdslen(port->ptr));
+    // name => ip:port
     cs = dictFetchValue(server.migrate_cached_sockets,name);
     if (cs) {
         sdsfree(name);
@@ -4570,6 +4571,7 @@ migrateCachedSocket* migrateGetSocket(client *c, robj *host, robj *port, long ti
     }
 
     /* No cached socket, create one. */
+    // 如果缓存的socket连接达到最大限制, 则随机释放一个连接
     if (dictSize(server.migrate_cached_sockets) == MIGRATE_SOCKET_CACHE_ITEMS) {
         /* Too many items, drop one at random. */
         dictEntry *de = dictGetRandomKey(server.migrate_cached_sockets);
@@ -4588,6 +4590,7 @@ migrateCachedSocket* migrateGetSocket(client *c, robj *host, robj *port, long ti
             server.neterr);
         return NULL;
     }
+    // 开启tcp nodelay
     anetEnableTcpNoDelay(server.neterr,fd);
 
     /* Check if it connects within the specified timeout. */
@@ -4604,6 +4607,7 @@ migrateCachedSocket* migrateGetSocket(client *c, robj *host, robj *port, long ti
     cs->fd = fd;
     cs->last_dbid = -1;
     cs->last_use_time = server.unixtime;
+    // 添加到socket缓存
     dictAdd(server.migrate_cached_sockets,name,cs);
     return cs;
 }
@@ -4654,7 +4658,9 @@ void migrateCommand(client *c) {
     int copy, replace, j;
     long timeout;
     long dbid;
+    // value(strings,hashes,sets......)
     robj **ov = NULL; /* Objects to migrate. */
+    // key
     robj **kv = NULL; /* Key names. */
     robj **newargv = NULL; /* Used to rewrite the command as DEL ... keys ... */
     rio cmd, payload;
@@ -4715,6 +4721,7 @@ void migrateCommand(client *c) {
             oi++;
         }
     }
+    // 真正需要迁移key的数量(有些指定的key可能不存在)
     num_keys = oi;
     if (num_keys == 0) {
         zfree(ov); zfree(kv);
@@ -4743,10 +4750,12 @@ try_again:
     }
 
     /* Create RESTORE payload and generate the protocol to call the command. */
+    // 为每个key构建RESTORE指令  (RESTORE key ttl serialized-value [REPLACE])
     for (j = 0; j < num_keys; j++) {
         long long ttl = 0;
+        // 获取当前key的过期时间
         long long expireat = getExpire(c->db,kv[j]);
-
+        // -1: 没有过期时间
         if (expireat != -1) {
             ttl = expireat-mstime();
             if (ttl < 1) ttl = 1;
@@ -4782,9 +4791,10 @@ try_again:
         sds buf = cmd.io.buffer.ptr;
         size_t pos = 0, towrite;
         int nwritten = 0;
-
+        // 同步发送构建好的RESTORE指令
         while ((towrite = sdslen(buf)-pos) > 0) {
             towrite = (towrite > (64*1024) ? (64*1024) : towrite);
+            // timeout并不是针对整个迁移动作而言, 而是针对每次最大的64KB数据传输而言
             nwritten = syncWrite(cs->fd,buf+pos,towrite,timeout);
             if (nwritten != (signed)towrite) {
                 write_error = 1;
@@ -4807,7 +4817,7 @@ try_again:
     int del_idx = 1; /* Index of the key argument for the replicated DEL op. */
 
     if (!copy) newargv = zmalloc(sizeof(robj*)*(num_keys+1));
-
+    // 依次读取RESTORE指令的返回结果
     for (j = 0; j < num_keys; j++) {
         if (syncReadLine(cs->fd, buf2, sizeof(buf2), timeout) <= 0) {
             socket_error = 1;
@@ -4824,6 +4834,7 @@ try_again:
         } else {
             if (!copy) {
                 /* No COPY option: remove the local key, signal the change. */
+            	// 没有copy选项, 并且在远程RESTORE成功, 那么可以删除本地的key
                 dbDelete(c->db,kv[j]);
                 signalModifiedKey(c->db,kv[j]);
                 server.dirty++;
