@@ -414,6 +414,7 @@ void clusterInit(void) {
     server.cluster->lastVoteEpoch = 0;
     server.cluster->stats_bus_messages_sent = 0;
     server.cluster->stats_bus_messages_received = 0;
+    // 初始化空指针数组
     memset(server.cluster->slots,0, sizeof(server.cluster->slots));
     clusterCloseAllSlots();
 
@@ -449,7 +450,7 @@ void clusterInit(void) {
                    "lower than 55535.");
         exit(1);
     }
-
+    // 如果当前节点在多个网络接口监听来之客户端的请求, 那么同样也会在这些网络接口监听cluster之间的连接和heartbeat
     if (listenToPort(server.port+CLUSTER_PORT_INCR,
         server.cfd,&server.cfd_count) == C_ERR)
     {
@@ -880,6 +881,7 @@ void clusterDelNode(clusterNode *delnode) {
         clusterNode *node = dictGetVal(de);
 
         if (node == delnode) continue;
+        // 如果node包含delnode发送的failure report, 那么清除它
         clusterNodeDelFailureReport(node,delnode);
     }
     dictReleaseIterator(di);
@@ -3078,6 +3080,7 @@ void clusterCron(void) {
      * not turned into a normal node is removed from the nodes. Usually it is
      * just the NODE_TIMEOUT value, but when NODE_TIMEOUT is too small we use
      * the value of 1 second. */
+    // 如果一个handshake node在handshake timeout内没有成为正式的node, 那么它将被从nodes列表中移除
     handshake_timeout = server.cluster_node_timeout;
     if (handshake_timeout < 1000) handshake_timeout = 1000;
 
@@ -3085,7 +3088,7 @@ void clusterCron(void) {
     di = dictGetSafeIterator(server.cluster->nodes);
     while((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
-
+        // 跳过自己和不知道地址的节点
         if (node->flags & (CLUSTER_NODE_MYSELF|CLUSTER_NODE_NOADDR)) continue;
 
         /* A Node in HANDSHAKE state has a limited lifespan equal to the
@@ -3115,9 +3118,11 @@ void clusterCron(void) {
                     server.neterr);
                 continue;
             }
+            // 创建到此节点的socket连接
             link = createClusterLink(node);
             link->fd = fd;
             node->link = link;
+            // 为此连接添加读事件
             aeCreateFileEvent(server.el,link->fd,AE_READABLE,
                     clusterReadHandler,link);
             /* Queue a PING in the new connection ASAP: this is crucial
@@ -3394,7 +3399,7 @@ int clusterNodeSetSlotBit(clusterNode *n, int slot) {
          *
          * See https://github.com/antirez/redis/issues/3043 for more info. */
         if (n->numslots == 1 && clusterMastersHaveSlaves())
-            n->flags |= CLUSTER_NODE_MIGRATE_TO;
+            n->flags |= CLUSTER_NODE_MIGRATE_TO;// 多余的slave可以被允许迁移到当前节点上
     }
     return old;
 }
@@ -3933,7 +3938,7 @@ void clusterCommand(client *c) {
         int j, slot;
         unsigned char *slots = zmalloc(CLUSTER_SLOTS);
         int del = !strcasecmp(c->argv[1]->ptr,"delslots");
-
+        // 初始化slots
         memset(slots,0,CLUSTER_SLOTS);
         /* Check that all the arguments are parseable and that all the
          * slots are not already busy. */
@@ -3951,6 +3956,7 @@ void clusterCommand(client *c) {
                 zfree(slots);
                 return;
             }
+            // 初始化为0, 0++ = 1
             if (slots[slot]++ == 1) {
                 addReplyErrorFormat(c,"Slot %d specified multiple times",
                     (int)slot);
@@ -3959,7 +3965,7 @@ void clusterCommand(client *c) {
             }
         }
         for (j = 0; j < CLUSTER_SLOTS; j++) {
-            if (slots[j]) {
+            if (slots[j]) {// 当前j为新增的slot
                 int retval;
 
                 /* If this slot was set as importing we can clear this
@@ -4349,7 +4355,7 @@ void clusterCommand(client *c) {
                 (unsigned long long) myself->configEpoch);
 
             if (server.cluster->currentEpoch < (uint64_t)epoch)
-                server.cluster->currentEpoch = epoch;
+                server.cluster->currentEpoch = epoch;// 始终以最大的configEpoch赋值于currentEpoch
             /* No need to fsync the config here since in the unlucky event
              * of a failure to persist the config, the conflict resolution code
              * will assign an unique config to this node. */
