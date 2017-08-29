@@ -38,10 +38,15 @@ struct clusterNode;
 
 /* clusterLink encapsulates everything needed to talk with a remote node. */
 typedef struct clusterLink {
+	// socket创建的时间
     mstime_t ctime;             /* Link creation time */
+    // socket对应的文件描述符
     int fd;                     /* TCP socket file descriptor */
+    // 当前连接发送buffer
     sds sndbuf;                 /* Packet send buffer */
+    // 当前连接接收buffer
     sds rcvbuf;                 /* Packet reception buffer */
+    // 当前连接对应的cluster节点
     struct clusterNode *node;   /* Node related to this link if any, or NULL */
 } clusterLink;
 
@@ -83,18 +88,26 @@ typedef struct clusterNodeFailReport {
 typedef struct clusterNode {
     mstime_t ctime; /* Node object creation time. */
     char name[CLUSTER_NAMELEN]; /* Node name, hex string, sha1-size */
+    // 当前cluster节点的各种状态(初始化的时候为CLUSTER_NODE_MYSELF|CLUSTER_NODE_MASTER)
     int flags;      /* CLUSTER_NODE_... */
+    // 当前节点的configEpoch
     uint64_t configEpoch; /* Last configEpoch observed for this node */
-    // 当前节点持有哪些slots(按bitmap方式存放)
+    // 当前节点持有哪些slots(按bitmap方式存放, 每个byte可以保存8个slots)
     unsigned char slots[CLUSTER_SLOTS/8]; /* slots handled by this node */
+    // 当前节点持有多少个slots
     int numslots;   /* Number of slots handled by this node */
+    // 如果当前节点是master, 那么它的slave数量
     int numslaves;  /* Number of slave nodes, if this is a master */
+    // 指向当前master节点所有的slave节点
     struct clusterNode **slaves; /* pointers to slave nodes */
+    // 指向当前节点对应的master节点
     struct clusterNode *slaveof; /* pointer to the master node. Note that it
                                     may be NULL even if the node is a slave
                                     if we don't have the master node in our
                                     tables. */
+    // 最近一次ping发送的时间
     mstime_t ping_sent;      /* Unix time we sent latest ping */
+    // 最近一次pong接收的时间
     mstime_t pong_received;  /* Unix time we received the pong */
     mstime_t fail_time;      /* Unix time when FAIL flag was set */
     mstime_t voted_time;     /* Last time we voted for a slave of this master */
@@ -103,6 +116,7 @@ typedef struct clusterNode {
     long long repl_offset;      /* Last known repl offset for this node. */
     char ip[NET_IP_STR_LEN];  /* Latest known IP address of this node */
     int port;                   /* Latest known port of this node */
+    // 当前cluster对应的socket连接
     clusterLink *link;          /* TCP/IP link with this node */
     list *fail_reports;         /* List of nodes signaling this as failing */
 } clusterNode;
@@ -119,6 +133,7 @@ typedef struct clusterState {
     clusterNode *importing_slots_from[CLUSTER_SLOTS];
     // 每个slot以及对应它的clusterNode
     clusterNode *slots[CLUSTER_SLOTS];
+    // zset数据结构, slot对应到score, key对应到member
     zskiplist *slots_to_keys;
     /* The following fields are used to take the slave state on elections. */
     mstime_t failover_auth_time; /* Time of previous or next election. */

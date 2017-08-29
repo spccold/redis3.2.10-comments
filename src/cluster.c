@@ -459,6 +459,7 @@ void clusterInit(void) {
         int j;
 
         for (j = 0; j < server.cfd_count; j++) {
+        	// 在多个网络接口上绑定clusterAcceptHandler事件
             if (aeCreateFileEvent(server.el, server.cfd[j], AE_READABLE,
                 clusterAcceptHandler, NULL) == AE_ERR)
                     serverPanic("Unrecoverable error creating Redis Cluster "
@@ -467,6 +468,7 @@ void clusterInit(void) {
     }
 
     /* The slots -> keys map is a sorted set. Init it. */
+    // 初始化slot和keys之前的映射关系, 通过一个slot可以获取这个slot下的所有key
     server.cluster->slots_to_keys = zslCreate();
 
     /* Set myself->port to my listening port, we'll just need to discover
@@ -660,6 +662,7 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->ctime = mstime();
     node->configEpoch = 0;
     node->flags = flags;
+    // 初始化slots数组
     memset(node->slots,0,sizeof(node->slots));
     node->numslots = 0;
     node->numslaves = 0;
@@ -668,6 +671,7 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->ping_sent = node->pong_received = 0;
     node->fail_time = 0;
     node->link = NULL;
+    // 初始化ip字符数组
     memset(node->ip,0,sizeof(node->ip));
     node->port = 0;
     node->fail_reports = listCreate();

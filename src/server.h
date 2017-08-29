@@ -731,7 +731,9 @@ struct redisServer {
     int ipfd[CONFIG_BINDADDR_MAX]; /* TCP socket file descriptors */
     int ipfd_count;             /* Used slots in ipfd[] */
     int sofd;                   /* Unix socket file descriptor */
+    // cluster节点当前监听的文件描述符
     int cfd[CONFIG_BINDADDR_MAX];/* Cluster bus listening socket */
+    // cluster节点当前监听的文件描述符数量
     int cfd_count;              /* Used slots in cfd[] */
     list *clients;              /* List of active clients */
     list *clients_to_close;     /* Clients to close asynchronously */
