@@ -1276,6 +1276,7 @@ int clusterStartHandshake(char *ip, int port) {
             (void*)&(((struct sockaddr_in6 *)&sa)->sin6_addr),
             norm_ip,NET_IP_STR_LEN);
 
+    // 检测当前节点是不是已经处于handshake状态
     if (clusterHandshakeInProgress(norm_ip,port)) {
         errno = EAGAIN;
         return 0;
@@ -1284,8 +1285,11 @@ int clusterStartHandshake(char *ip, int port) {
     /* Add the node with a random address (NULL as first argument to
      * createClusterNode()). Everything will be fixed during the
      * handshake. */
+    // 赋予新创建节点CLUSTER_NODE_HANDSHAKE和CLUSTER_NODE_MEET状态
     n = createClusterNode(NULL,CLUSTER_NODE_HANDSHAKE|CLUSTER_NODE_MEET);
+    // 赋予新创建节点ip
     memcpy(n->ip,norm_ip,sizeof(n->ip));
+    // 赋予新创建节点port
     n->port = port;
     clusterAddNode(n);
     return 1;
@@ -2198,7 +2202,7 @@ void clusterSendPing(clusterLink *link, int type) {
      * node_timeout we exchange with each other node at least 4 packets
      * (we ping in the worst case in node_timeout/2 time, and we also
      * receive two pings from the host), we have a total of 8 packets
-     * in the node_timeout*2 falure reports validity time. So we have
+     * in the node_timeout*2 failure reports validity time. So we have
      * that, for a single PFAIL node, we can expect to receive the following
      * number of failure reports (in the specified window of time):
      *
@@ -2221,7 +2225,7 @@ void clusterSendPing(clusterLink *link, int type) {
     if (wanted < 3) wanted = 3;
     if (wanted > freshnodes) wanted = freshnodes;
 
-    /* Compute the maxium totlen to allocate our buffer. We'll fix the totlen
+    /* Compute the maximum totlen to allocate our buffer. We'll fix the totlen
      * later according to the number of gossip sections we really were able
      * to put inside the packet. */
     totlen = sizeof(clusterMsg)-sizeof(union clusterMsgData);
@@ -2247,9 +2251,11 @@ void clusterSendPing(clusterLink *link, int type) {
 
         /* Don't include this node: the whole packet header is about us
          * already, so we just gossip about other nodes. */
+        // link对应的target node不需要忽略?
         if (this == myself) continue;
 
         /* Give a bias to FAIL/PFAIL nodes. */
+        // 尽可能更多添加状态为CLUSTER_NODE_PFAIL和CLUSTER_NODE_FAIL的节点到gossip中
         if (maxiterations > wanted*2 &&
             !(this->flags & (CLUSTER_NODE_PFAIL|CLUSTER_NODE_FAIL)))
             continue;
@@ -2262,7 +2268,7 @@ void clusterSendPing(clusterLink *link, int type) {
         if (this->flags & (CLUSTER_NODE_HANDSHAKE|CLUSTER_NODE_NOADDR) ||
             (this->link == NULL && this->numslots == 0))
         {
-            freshnodes--; /* Tecnically not correct, but saves CPU. */
+            freshnodes--; /* Technically not correct, but saves CPU. */
             continue;
         }
 
@@ -2271,14 +2277,17 @@ void clusterSendPing(clusterLink *link, int type) {
             if (memcmp(hdr->data.ping.gossip[j].nodename,this->name,
                     CLUSTER_NAMELEN) == 0) break;
         }
+        // j == gossipcount说明上面的循环正常终止(即当前节点的gossip还没被添加)
         if (j != gossipcount) continue;
 
         /* Add it */
         freshnodes--;
         gossip = &(hdr->data.ping.gossip[gossipcount]);
+        // copy nodename
         memcpy(gossip->nodename,this->name,CLUSTER_NAMELEN);
         gossip->ping_sent = htonl(this->ping_sent);
         gossip->pong_received = htonl(this->pong_received);
+        // copy ip
         memcpy(gossip->ip,this->ip,sizeof(this->ip));
         gossip->port = htons(this->port);
         gossip->flags = htons(this->flags);
@@ -2290,9 +2299,12 @@ void clusterSendPing(clusterLink *link, int type) {
     /* Ready to send... fix the totlen fiend and queue the message in the
      * output buffer. */
     totlen = sizeof(clusterMsg)-sizeof(union clusterMsgData);
+    // 计算最好的消息总长度
     totlen += (sizeof(clusterMsgDataGossip)*gossipcount);
     hdr->count = htons(gossipcount);
+    // 最后修改消息的总长度
     hdr->totlen = htonl(totlen);
+    // 发送组装好的消息
     clusterSendMessage(link,buf,totlen);
     zfree(buf);
 }
@@ -3106,7 +3118,7 @@ void clusterCron(void) {
             int fd;
             mstime_t old_ping_sent;
             clusterLink *link;
-
+            // 连接处于handshake状态的节点
             fd = anetTcpNonBlockBindConnect(server.neterr, node->ip,
                 node->port+CLUSTER_PORT_INCR, NET_FIRST_BIND_ADDR);
             if (fd == -1) {
@@ -3136,6 +3148,7 @@ void clusterCron(void) {
              * of a PING one, to force the receiver to add us in its node
              * table. */
             old_ping_sent = node->ping_sent;
+            // 决定发送普通的ping还是meet
             clusterSendPing(link, node->flags & CLUSTER_NODE_MEET ?
                     CLUSTERMSG_TYPE_MEET : CLUSTERMSG_TYPE_PING);
             if (old_ping_sent) {
@@ -3346,9 +3359,11 @@ void clusterDoBeforeSleep(int flags) {
 
 /* Test bit 'pos' in a generic bitmap. Return 1 if the bit is set,
  * otherwise 0. */
+// true: 1, false: 0
 int bitmapTestBit(unsigned char *bitmap, int pos) {
     off_t byte = pos/8;
     int bit = pos&7;
+    // 检查对应的bit位是否存在(检查对应的slot:pos是否被持有)
     return (bitmap[byte] & (1<<bit)) != 0;
 }
 
@@ -3356,6 +3371,7 @@ int bitmapTestBit(unsigned char *bitmap, int pos) {
 void bitmapSetBit(unsigned char *bitmap, int pos) {
     off_t byte = pos/8;
     int bit = pos&7;
+    // 把对应的bit位置为1(添加对slot:pos的持有)
     bitmap[byte] |= 1<<bit;
 }
 
@@ -3363,6 +3379,7 @@ void bitmapSetBit(unsigned char *bitmap, int pos) {
 void bitmapClearBit(unsigned char *bitmap, int pos) {
     off_t byte = pos/8;
     int bit = pos&7;
+    // 清除对应的bit位(移除对slot:pos的持有)
     bitmap[byte] &= ~(1<<bit);
 }
 
@@ -3387,23 +3404,23 @@ int clusterMastersHaveSlaves(void) {
 int clusterNodeSetSlotBit(clusterNode *n, int slot) {
     int old = bitmapTestBit(n->slots,slot);
     bitmapSetBit(n->slots,slot);
-    if (!old) {
-        n->numslots++;
+    if (!old) {// 当前节点不曾持有当前slot
+        n->numslots++; // 增加当前节点持有的slots数量
         /* When a master gets its first slot, even if it has no slaves,
          * it gets flagged with MIGRATE_TO, that is, the master is a valid
          * target for replicas migration, if and only if at least one of
          * the other masters has slaves right now.
          *
-         * Normally masters are valid targerts of replica migration if:
+         * Normally masters are valid targets of replica migration if:
          * 1. The used to have slaves (but no longer have).
          * 2. They are slaves failing over a master that used to have slaves.
          *
          * However new masters with slots assigned are considered valid
-         * migration tagets if the rest of the cluster is not a slave-less.
+         * migration targets if the rest of the cluster is not a slave-less.
          *
          * See https://github.com/antirez/redis/issues/3043 for more info. */
         if (n->numslots == 1 && clusterMastersHaveSlaves())
-            n->flags |= CLUSTER_NODE_MIGRATE_TO;// 多余的slave可以被允许迁移到当前节点上
+            n->flags |= CLUSTER_NODE_MIGRATE_TO;// 多余的slave可以被允许迁移到当前节点上, 当然还要根据cluster-migration-barrier(默认为1)
     }
     return old;
 }
@@ -3902,7 +3919,7 @@ void clusterCommand(client *c) {
                                 (char*)c->argv[3]->ptr);
             return;
         }
-
+        // 创建一个
         if (clusterStartHandshake(c->argv[2]->ptr,port) == 0 &&
             errno == EINVAL)
         {
@@ -3951,11 +3968,11 @@ void clusterCommand(client *c) {
                 zfree(slots);
                 return;
             }
-            if (del && server.cluster->slots[slot] == NULL) {
+            if (del && server.cluster->slots[slot] == NULL) {// slot没被分配过, 所有删除操作是非法的
                 addReplyErrorFormat(c,"Slot %d is already unassigned", slot);
                 zfree(slots);
                 return;
-            } else if (!del && server.cluster->slots[slot]) {
+            } else if (!del && server.cluster->slots[slot]) {// slot已经分配过了
                 addReplyErrorFormat(c,"Slot %d is already busy", slot);
                 zfree(slots);
                 return;
@@ -3974,6 +3991,7 @@ void clusterCommand(client *c) {
 
                 /* If this slot was set as importing we can clear this
                  * state as now we are the real owner of the slot. */
+                // 如果当前的slot处于导入状态, 则清除这个状态, 因为现在我们确实持有当前的slot
                 if (server.cluster->importing_slots_from[j])
                     server.cluster->importing_slots_from[j] = NULL;
 
@@ -4347,7 +4365,7 @@ void clusterCommand(client *c) {
 
         if (epoch < 0) {
             addReplyErrorFormat(c,"Invalid config epoch specified: %lld",epoch);
-        } else if (dictSize(server.cluster->nodes) > 1) {
+        } else if (dictSize(server.cluster->nodes) > 1) {// 排除自身节点, 不应该再知道其它节点
             addReplyError(c,"The user can assign a config epoch only when the "
                             "node does not know any other node.");
         } else if (myself->configEpoch != 0) {
@@ -5051,10 +5069,12 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
         mcmd = ms->commands[i].cmd;
         margc = ms->commands[i].argc;
         margv = ms->commands[i].argv;
-
+        // key position数组
         keyindex = getKeysFromCommand(mcmd,margv,margc,&numkeys);
         for (j = 0; j < numkeys; j++) {
+        	// 获取key
             robj *thiskey = margv[keyindex[j]];
+            // 获取key对应的slot
             int thisslot = keyHashSlot((char*)thiskey->ptr,
                                        sdslen(thiskey->ptr));
 
@@ -5069,6 +5089,7 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
                  * state. However the state is yet to be updated, so this was
                  * not trapped earlier in processCommand(). Report the same
                  * error to the client. */
+                // 当前访问的slot还没有完成分配
                 if (n == NULL) {
                     getKeysFreeResult(keyindex);
                     if (error_code)
@@ -5092,7 +5113,7 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
                 /* If it is not the first key, make sure it is exactly
                  * the same key as the first we saw. */
                 if (!equalStringObjects(firstkey,thiskey)) {
-                    if (slot != thisslot) {
+                    if (slot != thisslot) {// 多个key不属于同一个slot
                         /* Error: multiple keys from different slots. */
                         getKeysFreeResult(keyindex);
                         if (error_code)
@@ -5106,7 +5127,7 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
                 }
             }
 
-            /* Migarting / Improrting slot? Count keys we don't have. */
+            /* Migrating / Importing slot? Count keys we don't have. */
             if ((migrating_slot || importing_slot) &&
                 lookupKeyRead(&server.db[0],thiskey) == NULL)
             {

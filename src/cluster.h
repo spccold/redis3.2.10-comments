@@ -114,6 +114,7 @@ typedef struct clusterNode {
     mstime_t repl_offset_time;  /* Unix time we received offset for this node */
     mstime_t orphaned_time;     /* Starting time of orphaned master condition */
     long long repl_offset;      /* Last known repl offset for this node. */
+    // 当前cluster节点的ip和端口
     char ip[NET_IP_STR_LEN];  /* Latest known IP address of this node */
     int port;                   /* Latest known port of this node */
     // 当前cluster对应的socket连接
@@ -241,7 +242,9 @@ union clusterMsgData {
 #define CLUSTER_PROTO_VER 0 /* Cluster bus protocol version. */
 
 typedef struct {
+	// 魔数
     char sig[4];        /* Siganture "RCmb" (Redis Cluster message bus). */
+    // 整个tcp数据包的长度
     uint32_t totlen;    /* Total length of this message */
     uint16_t ver;       /* Protocol version, currently set to 0. */
     uint16_t notused0;  /* 2 bytes not used. */
