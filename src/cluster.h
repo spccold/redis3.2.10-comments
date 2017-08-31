@@ -157,7 +157,9 @@ typedef struct clusterState {
     /* The followign fields are used by masters to take state on elections. */
     uint64_t lastVoteEpoch;     /* Epoch of the last vote granted. */
     int todo_before_sleep; /* Things to do in clusterBeforeSleep(). */
+    // 当前cluster节点发送的cluster消息数量
     long long stats_bus_messages_sent;  /* Num of msg sent via cluster bus. */
+    // 当前cluster节点接收的cluster消息数量
     long long stats_bus_messages_received; /* Num of msg rcvd via cluster bus.*/
 } clusterState;
 
@@ -262,6 +264,7 @@ typedef struct {
     // 当前节点的master节点(如果当前是slave节点)
     char slaveof[CLUSTER_NAMELEN];
     char notused1[32];  /* 32 bytes reserved for future usage. */
+    // ip通过socket可以获取
     uint16_t port;      /* Sender TCP base port */
     uint16_t flags;     /* Sender node flags */
     unsigned char state; /* Cluster state from the POV of the sender */

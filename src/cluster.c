@@ -601,7 +601,7 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         serverLog(LL_VERBOSE,"Accepted cluster node %s:%d", cip, cport);
         /* Create a link object we use to handle the connection.
          * It gets passed to the readable handler when data is available.
-         * Initiallly the link->node pointer is set to NULL as we don't know
+         * Initially the link->node pointer is set to NULL as we don't know
          * which node is, but the right node is references once we know the
          * node identity. */
         link = createClusterLink(NULL);
@@ -648,7 +648,7 @@ unsigned int keyHashSlot(char *key, int keylen) {
 /* Create a new cluster node, with the specified flags.
  * If "nodename" is NULL this is considered a first handshake and a random
  * node name is assigned to this node (it will be fixed later when we'll
- * receive the first pong).
+ * receive the first PONG).
  *
  * The node is created and returned to the user, but it is not automatically
  * added to the nodes hash table. */
@@ -1300,6 +1300,7 @@ int clusterStartHandshake(char *ip, int port) {
  * by the caller, not in the content of the gossip section, but in the
  * length. */
 void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
+	// gossip消息的数量
     uint16_t count = ntohs(hdr->count);
     clusterMsgDataGossip *g = (clusterMsgDataGossip*) hdr->data.ping.gossip;
     clusterNode *sender = link->node ? link->node : clusterLookupNode(hdr->sender);
@@ -1552,8 +1553,9 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
 int clusterProcessPacket(clusterLink *link) {
     clusterMsg *hdr = (clusterMsg*) link->rcvbuf;
     uint32_t totlen = ntohl(hdr->totlen);
+    // 当前消息的类型
     uint16_t type = ntohs(hdr->type);
-
+    // 增加当前节点消息接收数量
     server.cluster->stats_bus_messages_received++;
     serverLog(LL_DEBUG,"--- Processing packet of type %d, %lu bytes",
         type, (unsigned long) totlen);
@@ -1566,7 +1568,7 @@ int clusterProcessPacket(clusterLink *link) {
         /* Can't handle messages of different versions. */
         return 1;
     }
-
+    // 发送节点存在哪些状态
     uint16_t flags = ntohs(hdr->flags);
     uint64_t senderCurrentEpoch = 0, senderConfigEpoch = 0;
     clusterNode *sender;
@@ -1646,7 +1648,7 @@ int clusterProcessPacket(clusterLink *link) {
 
         /* We use incoming MEET messages in order to set the address
          * for 'myself', since only other cluster nodes will send us
-         * MEET messagses on handshakes, when the cluster joins, or
+         * MEET messages on handshakes, when the cluster joins, or
          * later if we changed address, and those nodes will use our
          * official address to connect to us. So by obtaining this address
          * from the socket is a simple way to discover / update our own
@@ -1657,7 +1659,7 @@ int clusterProcessPacket(clusterLink *link) {
          * by MEET later. */
         if (type == CLUSTERMSG_TYPE_MEET || myself->ip[0] == '\0') {
             char ip[NET_IP_STR_LEN];
-
+            // 获取myself的ip地址(并没有写死在配置中)
             if (anetSockName(link->fd,ip,sizeof(ip),NULL) != -1 &&
                 strcmp(ip,myself->ip))
             {
@@ -1674,7 +1676,7 @@ int clusterProcessPacket(clusterLink *link) {
          * resolved when we'll receive PONGs from the node. */
         if (!sender && type == CLUSTERMSG_TYPE_MEET) {
             clusterNode *node;
-
+            // 虽然此时我们已经知道sender的name, 但是在创建节点的时候任然随机生成一个,  当第一次收到该节点的PONG时再更新成正确的值
             node = createClusterNode(NULL,CLUSTER_NODE_HANDSHAKE);
             nodeIp2String(node->ip,link);
             node->port = ntohs(hdr->port);
@@ -2015,8 +2017,9 @@ void clusterWriteHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         handleLinkIOError(link);
         return;
     }
+    // 舍去已经发送的
     sdsrange(link->sndbuf,nwritten,-1);
-    if (sdslen(link->sndbuf) == 0)
+    if (sdslen(link->sndbuf) == 0)// buf发送完毕后, 删除写事件(每次在发送cluster消息是如果发现sndbuf为空会再次添加写事件)
         aeDeleteFileEvent(server.el, link->fd, AE_WRITABLE);
 }
 
@@ -2032,16 +2035,17 @@ void clusterReadHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(el);
     UNUSED(mask);
 
-    while(1) { /* Read as long as there is data to read. */
+    while(1) { /* Read as long as there is no data to read. */
         rcvbuflen = sdslen(link->rcvbuf);
         if (rcvbuflen < 8) {
             /* First, obtain the first 8 bytes to get the full message
              * length. */
+        	// 首先读取8字节( sig(4 bit) + totlen(4 bit) ), rcvbuflen为之前已经读取的长度, 8 - rcvbuflen为当前还需要读取的字节数
             readlen = 8 - rcvbuflen;
         } else {
             /* Finally read the full message. */
             hdr = (clusterMsg*) link->rcvbuf;
-            if (rcvbuflen == 8) {
+            if (rcvbuflen == 8) {// 检查消息签名是否合法(P.S. 二进制协议的设计都应该添加签名, 防止无限的消息乱序)
                 /* Perform some sanity check on the message signature
                  * and length. */
                 if (memcmp(hdr->sig,"RCmb",4) != 0 ||
@@ -2055,6 +2059,7 @@ void clusterReadHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                 }
             }
             readlen = ntohl(hdr->totlen) - rcvbuflen;
+            // 每次读取数据不能超过buffer大小
             if (readlen > sizeof(buf)) readlen = sizeof(buf);
         }
 
@@ -2075,9 +2080,10 @@ void clusterReadHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         }
 
         /* Total length obtained? Process this packet. */
-        if (rcvbuflen >= 8 && rcvbuflen == ntohl(hdr->totlen)) {
+        if (rcvbuflen >= 8 && rcvbuflen == ntohl(hdr->totlen)) {// 读完一个完整的cluster消息
             if (clusterProcessPacket(link)) {
-                sdsfree(link->rcvbuf);
+            	// 每次读取完一个消息后, 重新创建rcvbuf
+            	sdsfree(link->rcvbuf);
                 link->rcvbuf = sdsempty();
             } else {
                 return; /* Link no longer valid. */
@@ -2142,6 +2148,7 @@ void clusterBuildMessageHdr(clusterMsg *hdr, int type) {
     hdr->sig[1] = 'C';
     hdr->sig[2] = 'm';
     hdr->sig[3] = 'b';
+    // cluster消息类型(ping, meet......)
     hdr->type = htons(type);
     memcpy(hdr->sender,myself->name,CLUSTER_NAMELEN);
 
@@ -2301,6 +2308,7 @@ void clusterSendPing(clusterLink *link, int type) {
     totlen = sizeof(clusterMsg)-sizeof(union clusterMsgData);
     // 计算最好的消息总长度
     totlen += (sizeof(clusterMsgDataGossip)*gossipcount);
+    // 指定gossip消息数量
     hdr->count = htons(gossipcount);
     // 最后修改消息的总长度
     hdr->totlen = htonl(totlen);
