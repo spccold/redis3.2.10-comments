@@ -59,7 +59,7 @@ typedef struct clusterLink {
 #define CLUSTER_NODE_HANDSHAKE 32 /* We have still to exchange the first ping */
 #define CLUSTER_NODE_NOADDR   64  /* We don't know the address of this node */
 #define CLUSTER_NODE_MEET 128     /* Send a MEET message to this node */
-#define CLUSTER_NODE_MIGRATE_TO 256 /* Master elegible for replica migration. */
+#define CLUSTER_NODE_MIGRATE_TO 256 /* Master eligible for replica migration. */
 // '\0' == '\00' == '\000' == Null Character
 #define CLUSTER_NODE_NULL_NAME "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000"
 
@@ -87,6 +87,7 @@ typedef struct clusterNodeFailReport {
 
 typedef struct clusterNode {
     mstime_t ctime; /* Node object creation time. */
+    // 唯一的标识一个cluster node(而不是ip:port, ip和端口是可以改变的)
     char name[CLUSTER_NAMELEN]; /* Node name, hex string, sha1-size */
     // 当前cluster节点的各种状态(初始化的时候为CLUSTER_NODE_MYSELF|CLUSTER_NODE_MASTER)
     int flags;      /* CLUSTER_NODE_... */
@@ -105,7 +106,7 @@ typedef struct clusterNode {
                                     may be NULL even if the node is a slave
                                     if we don't have the master node in our
                                     tables. */
-    // 最近一次ping发送的时间
+    // 最近一次ping发送的时间(没有pending ping的时候, ping_sent会重置为0)
     mstime_t ping_sent;      /* Unix time we sent latest ping */
     // 最近一次pong接收的时间
     mstime_t pong_received;  /* Unix time we received the pong */
@@ -114,7 +115,7 @@ typedef struct clusterNode {
     mstime_t repl_offset_time;  /* Unix time we received offset for this node */
     mstime_t orphaned_time;     /* Starting time of orphaned master condition */
     long long repl_offset;      /* Last known repl offset for this node. */
-    // 当前cluster节点的ip和端口
+    // 当前cluster节点的ip和端口(收到其它节点的ping消息后方可确定)
     char ip[NET_IP_STR_LEN];  /* Latest known IP address of this node */
     int port;                   /* Latest known port of this node */
     // 当前cluster对应的socket连接
@@ -151,10 +152,10 @@ typedef struct clusterState {
     clusterNode *mf_slave;      /* Slave performing the manual failover. */
     /* Manual failover state of slave. */
     long long mf_master_offset; /* Master offset the slave needs to start MF
-                                   or zero if stil not received. */
+                                   or zero if still not received. */
     int mf_can_start;           /* If non-zero signal that the manual failover
                                    can start requesting masters vote. */
-    /* The followign fields are used by masters to take state on elections. */
+    /* The following fields are used by masters to take state on elections. */
     uint64_t lastVoteEpoch;     /* Epoch of the last vote granted. */
     int todo_before_sleep; /* Things to do in clusterBeforeSleep(). */
     // 当前cluster节点发送的cluster消息数量
@@ -261,7 +262,7 @@ typedef struct {
     // 发送消息节点的名称
     char sender[CLUSTER_NAMELEN]; /* Name of the sender node */
     unsigned char myslots[CLUSTER_SLOTS/8];
-    // 当前节点的master节点(如果当前是slave节点)
+    // 当前节点的master节点(如果当前是slave节点), 用于判断当前节点是master还是slave
     char slaveof[CLUSTER_NAMELEN];
     char notused1[32];  /* 32 bytes reserved for future usage. */
     // ip通过socket可以获取

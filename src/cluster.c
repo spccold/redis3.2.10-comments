@@ -427,6 +427,7 @@ void clusterInit(void) {
     if (clusterLoadConfig(server.cluster_configfile) == C_ERR) {
         /* No configuration found. We will just use the random name provided
          * by the createClusterNode() function. */
+    	// 每个fresh cluster node启动以后, nodename都是随机创建的
         myself = server.cluster->myself =
             createClusterNode(NULL,CLUSTER_NODE_MYSELF|CLUSTER_NODE_MASTER);
         serverLog(LL_NOTICE,"No cluster configuration found, I'm %.40s",
@@ -587,6 +588,7 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     if (server.masterhost == NULL && server.loading) return;
 
     while(max--) {
+    	// 接收来自于其它cluster node的握手(连接)请求
         cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);
         if (cfd == ANET_ERR) {
             if (errno != EWOULDBLOCK)
@@ -604,6 +606,7 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
          * Initially the link->node pointer is set to NULL as we don't know
          * which node is, but the right node is references once we know the
          * node identity. */
+        // cluster集群间两个节点之间的连接是不共享的, 需要两个连接
         link = createClusterLink(NULL);
         link->fd = cfd;
         aeCreateFileEvent(server.el,cfd,AE_READABLE,clusterReadHandler,link);
@@ -783,8 +786,10 @@ int clusterNodeRemoveSlave(clusterNode *master, clusterNode *slave) {
 
     for (j = 0; j < master->numslaves; j++) {
         if (master->slaves[j] == slave) {
-            if ((j+1) < master->numslaves) {
+            if ((j+1) < master->numslaves) {// slave不在slaves数组的最后一个位置
+            	// 当前index后面还有多少element
                 int remaining_slaves = (master->numslaves - j) - 1;
+                // 移动remaining_slaves
                 memmove(master->slaves+j,master->slaves+(j+1),
                         (sizeof(*master->slaves) * remaining_slaves));
             }
@@ -1416,6 +1421,7 @@ int nodeUpdateAddressIfNeeded(clusterNode *node, clusterLink *link, int port) {
 
     /* Check if this is our master and we have to change the
      * replication target as well. */
+    // 如果当前节点是slave, 并且对应的master节点的ip或者port发生变化, 那么应该重新设置主从复制
     if (nodeIsSlave(myself) && myself->slaveof == node)
         replicationSetMaster(node->ip, node->port);
     return 1;
@@ -1444,7 +1450,7 @@ void clusterSetNodeAsMaster(clusterNode *n) {
  * PING, PONG or UPDATE packet. What we receive is a node, a configEpoch of the
  * node, and the set of slots claimed under this configEpoch.
  *
- * What we do is to rebind the slots with newer configuration compared to our
+ * What we do is to rebuild the slots with newer configuration compared to our
  * local configuration, and if needed, we turn ourself into a replica of the
  * node (see the function comments for more info).
  *
@@ -1676,10 +1682,13 @@ int clusterProcessPacket(clusterLink *link) {
          * resolved when we'll receive PONGs from the node. */
         if (!sender && type == CLUSTERMSG_TYPE_MEET) {
             clusterNode *node;
-            // 虽然此时我们已经知道sender的name, 但是在创建节点的时候任然随机生成一个,  当第一次收到该节点的PONG时再更新成正确的值
+            // 虽然此时我们已经知道sender的name, 但是在创建节点的时候任然随机生成一个, 当第一次收到该节点的PONG时再更新成正确的值
             node = createClusterNode(NULL,CLUSTER_NODE_HANDSHAKE);
+            // 从连接中获取远程节点的ip(cluster消息头并不包含ip, 因为不需要)
             nodeIp2String(node->ip,link);
+            // 从cluster消息头中获取远程节点的port
             node->port = ntohs(hdr->port);
+            // 在随后的clusterCron中, 会对该发起meet的节点进行握手
             clusterAddNode(node);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
         }
@@ -1702,7 +1711,7 @@ int clusterProcessPacket(clusterLink *link) {
             type == CLUSTERMSG_TYPE_PING ? "ping" : "pong",
             (void*)link->node);
         if (link->node) {
-            if (nodeInHandshake(link->node)) {
+            if (nodeInHandshake(link->node)) {// 完成握手
                 /* If we already have this node, try to change the
                  * IP/port of the node with the new one. */
                 if (sender) {
@@ -1722,15 +1731,19 @@ int clusterProcessPacket(clusterLink *link) {
 
                 /* First thing to do is replacing the random name with the
                  * right node name if this was a handshake stage. */
+                // 除了myself随机生成的nodename有效, 集群中其它节点的nodename一开始都是随机生成的, 然后对这些节点进行handshake
+                // 等待这些节点第一次PONG返回之后, 更新这些节点的nodename(来自于它们的myself->name, 而每个节点myself->name是一定的)
                 clusterRenameNode(link->node, hdr->sender);
                 serverLog(LL_DEBUG,"Handshake with node %.40s completed.",
                     link->node->name);
+                // 已完成握手, 取消CLUSTER_NODE_HANDSHAKE标志
                 link->node->flags &= ~CLUSTER_NODE_HANDSHAKE;
+                // 确定该节点是master, 还是slave
                 link->node->flags |= flags&(CLUSTER_NODE_MASTER|CLUSTER_NODE_SLAVE);
                 clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
             } else if (memcmp(link->node->name,hdr->sender,
                         CLUSTER_NAMELEN) != 0)
-            {
+            { // node name是唯一标识cluster节点的, 而不是ip和port
                 /* If the reply has a non matching node ID we
                  * disconnect this node and set it as not having an associated
                  * address. */
@@ -1748,6 +1761,7 @@ int clusterProcessPacket(clusterLink *link) {
         }
 
         /* Update the node address if it changed. */
+        // 是否需要更新节点的ip和port
         if (sender && type == CLUSTERMSG_TYPE_PING &&
             !nodeInHandshake(sender) &&
             nodeUpdateAddressIfNeeded(sender,link,ntohs(hdr->port)))
@@ -1758,7 +1772,9 @@ int clusterProcessPacket(clusterLink *link) {
 
         /* Update our info about the node */
         if (link->node && type == CLUSTERMSG_TYPE_PONG) {
+        	// 更新PONG接收的时间
             link->node->pong_received = mstime();
+            // 重置ping_sent(clusterSendPing中设置mstime()到ping_sent)
             link->node->ping_sent = 0;
 
             /* The PFAIL condition can be reversed without external
@@ -1780,18 +1796,21 @@ int clusterProcessPacket(clusterLink *link) {
         if (sender) {
             if (!memcmp(hdr->slaveof,CLUSTER_NODE_NULL_NAME,
                 sizeof(hdr->slaveof)))
-            {
+            {// 为啥不用hdr->flags判断sender是master还是slave?
                 /* Node is a master. */
                 clusterSetNodeAsMaster(sender);
             } else {
                 /* Node is a slave. */
                 clusterNode *master = clusterLookupNode(hdr->slaveof);
-
+                // master节点变成了slave节点
                 if (nodeIsMaster(sender)) {
                     /* Master turned into a slave! Reconfigure the node. */
-                    clusterDelNodeSlots(sender);
+                	// 不再是master节点, 所以需要移除slots
+                	clusterDelNodeSlots(sender);
+                    // 移除CLUSTER_NODE_MASTER和CLUSTER_NODE_MIGRATE_TO标志(cluster replication migration只针对master节点)
                     sender->flags &= ~(CLUSTER_NODE_MASTER|
                                        CLUSTER_NODE_MIGRATE_TO);
+                    // 添加CLUSTER_NODE_SLAVE标志
                     sender->flags |= CLUSTER_NODE_SLAVE;
 
                     /* Update config and state. */
@@ -1800,6 +1819,7 @@ int clusterProcessPacket(clusterLink *link) {
                 }
 
                 /* Master node changed for this slave? */
+                // 当前的slave节点重新选择了别的master节点
                 if (master && sender->slaveof != master) {
                     if (sender->slaveof)
                         clusterNodeRemoveSlave(sender->slaveof,sender);
@@ -1847,7 +1867,7 @@ int clusterProcessPacket(clusterLink *link) {
          * hash slots, but with a configuration that other instances know to
          * be deprecated. Example:
          *
-         * A and B are master and slave for slots 1,2,3.
+         * (A and B are master and slave) for slots 1,2,3.
          * A is partitioned away, B gets promoted.
          * B is partitioned away, and A returns available.
          *
@@ -2030,6 +2050,7 @@ void clusterReadHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     char buf[sizeof(clusterMsg)];
     ssize_t nread;
     clusterMsg *hdr;
+    // 读取来自于当前连接的信息
     clusterLink *link = (clusterLink*) privdata;
     unsigned int readlen, rcvbuflen;
     UNUSED(el);
@@ -2245,7 +2266,7 @@ void clusterSendPing(clusterLink *link, int type) {
 
     /* Populate the header. */
     if (link->node && type == CLUSTERMSG_TYPE_PING)
-        link->node->ping_sent = mstime();
+        link->node->ping_sent = mstime();// 设置PING发送时间, 收到PONG之后, ping_sent会重新置为0
     clusterBuildMessageHdr(hdr,type);
 
     /* Populate the gossip fields */
@@ -3180,6 +3201,7 @@ void clusterCron(void) {
 
     /* Ping some random node 1 time every 10 iterations, so that we usually ping
      * one random node every second. */
+    // 1秒执行一次
     if (!(iteration % 10)) {
         int j;
 
@@ -3198,6 +3220,7 @@ void clusterCron(void) {
                 min_pong = this->pong_received;
             }
         }
+        // min_pong_node with the oldest pong_received time, so we need ping it right now
         if (min_pong_node) {
             serverLog(LL_DEBUG,"Pinging node %.40s", min_pong_node->name);
             clusterSendPing(min_pong_node->link, CLUSTERMSG_TYPE_PING);
@@ -3475,7 +3498,7 @@ int clusterDelNodeSlots(clusterNode *node) {
     int deleted = 0, j;
 
     for (j = 0; j < CLUSTER_SLOTS; j++) {
-        if (clusterNodeGetSlotBit(node,j)) {
+        if (clusterNodeGetSlotBit(node,j)) {// 返回1, 说明存在这个节点
             clusterDelSlot(j);
             deleted++;
         }
@@ -3684,6 +3707,7 @@ void clusterSetMaster(clusterNode *n) {
         if (myself->slaveof)
             clusterNodeRemoveSlave(myself->slaveof,myself);
     }
+    // n is my master
     myself->slaveof = n;
     clusterNodeAddSlave(n,myself);
     replicationSetMaster(n->ip, n->port);
@@ -3927,7 +3951,7 @@ void clusterCommand(client *c) {
                                 (char*)c->argv[3]->ptr);
             return;
         }
-        // 创建一个
+
         if (clusterStartHandshake(c->argv[2]->ptr,port) == 0 &&
             errno == EINVAL)
         {
@@ -5189,6 +5213,8 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
     /* Handle the read-only client case reading from a slave: if this
      * node is a slave and the request is about an hash slot our master
      * is serving, we can reply without redirection. */
+    // 如果当前client是readonly的, 并且执行的是读命令, 并且当前访问的slot由当前slave的master节点持有, 那么当前节点可以处理这个请求
+    // 通常客户端实现只会通过master连接访问数据(例如jedis), 所有这个分支几乎走不到
     if (c->flags & CLIENT_READONLY &&
         cmd->flags & CMD_READONLY &&
         nodeIsSlave(myself) &&
