@@ -858,7 +858,7 @@ int clusterAddNode(clusterNode *node) {
     return (retval == DICT_OK) ? C_OK : C_ERR;
 }
 
-/* Remove a node from the cluster. The functio performs the high level
+/* Remove a node from the cluster. The function performs the high level
  * cleanup, calling freeClusterNode() for the low level cleanup.
  * Here we do the following:
  *
@@ -884,7 +884,7 @@ void clusterDelNode(clusterNode *delnode) {
             clusterDelSlot(j);
     }
 
-    /* 2) Remove failure reports. */
+    /* 2) Remove failure reports send by delnode. */
     di = dictGetSafeIterator(server.cluster->nodes);
     while((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
@@ -1063,7 +1063,7 @@ void clusterHandleConfigEpochCollision(clusterNode *sender) {
  * CLUSTER nodes blacklist
  *
  * The nodes blacklist is just a way to ensure that a given node with a given
- * Node ID is not readded before some time elapsed (this time is specified
+ * Node ID is not re-added before some time elapsed (this time is specified
  * in seconds in CLUSTER_BLACKLIST_TTL).
  *
  * This is useful when we want to remove a node from the cluster completely:
@@ -1372,7 +1372,7 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
             if (sender &&
                 !(flags & CLUSTER_NODE_NOADDR) &&
                 !clusterBlacklistExists(g->nodename))
-            {
+            {// 执行cluster forget时会先把节点加入到黑名单
                 clusterStartHandshake(g->ip,ntohs(g->port));
             }
         }
@@ -1666,8 +1666,7 @@ int clusterProcessPacket(clusterLink *link) {
         if (type == CLUSTERMSG_TYPE_MEET || myself->ip[0] == '\0') {
             char ip[NET_IP_STR_LEN];
             // 获取myself的ip地址(并没有写死在配置中)
-            if (anetSockName(link->fd,ip,sizeof(ip),NULL) != -1 &&
-                strcmp(ip,myself->ip))
+            if (anetSockName(link->fd,ip,sizeof(ip),NULL) != -1 && strcmp(ip,myself->ip))
             {
                 memcpy(myself->ip,ip,NET_IP_STR_LEN);
                 serverLog(LL_WARNING,"IP address for this node updated to %s",
@@ -1805,7 +1804,7 @@ int clusterProcessPacket(clusterLink *link) {
                 // master节点变成了slave节点
                 if (nodeIsMaster(sender)) {
                     /* Master turned into a slave! Reconfigure the node. */
-                	// 不再是master节点, 所以需要移除slots
+                	// 不再是master节点, 所以需要移除slots(只有master节点才会持有slots)
                 	clusterDelNodeSlots(sender);
                     // 移除CLUSTER_NODE_MASTER和CLUSTER_NODE_MIGRATE_TO标志(cluster replication migration只针对master节点)
                     sender->flags &= ~(CLUSTER_NODE_MASTER|
@@ -1881,10 +1880,10 @@ int clusterProcessPacket(clusterLink *link) {
 
             for (j = 0; j < CLUSTER_SLOTS; j++) {
                 if (bitmapTestBit(hdr->myslots,j)) {
-                    if (server.cluster->slots[j] == sender ||
-                        server.cluster->slots[j] == NULL) continue;
-                    if (server.cluster->slots[j]->configEpoch >
-                        senderConfigEpoch)
+                    if (server.cluster->slots[j] == sender || server.cluster->slots[j] == NULL){
+                    	continue;
+                    }
+                    if (server.cluster->slots[j]->configEpoch > senderConfigEpoch)
                     {
                         serverLog(LL_VERBOSE,
                             "Node %.40s has old slots configuration, sending "
@@ -3229,9 +3228,8 @@ void clusterCron(void) {
 
     /* Iterate nodes to check if we need to flag something as failing.
      * This loop is also responsible to:
-     * 1) Check if there are orphaned masters (masters without non failing
-     *    slaves).
-     * 2) Count the max number of non failing slaves for a single master.
+     * 1) Check if there are orphaned masters (masters without living slaves).
+     * 2) Count the max number of living slaves for a single master.
      * 3) Count the number of slaves for our master, if we are a slave. */
     orphaned_masters = 0;
     max_slaves = 0;
@@ -3702,6 +3700,7 @@ void clusterSetMaster(clusterNode *n) {
     if (nodeIsMaster(myself)) {
         myself->flags &= ~(CLUSTER_NODE_MASTER|CLUSTER_NODE_MIGRATE_TO);
         myself->flags |= CLUSTER_NODE_SLAVE;
+        // 情况migrating和importing状态(slave不能持有这些状态)
         clusterCloseAllSlots();
     } else {
         if (myself->slaveof)
@@ -4247,6 +4246,8 @@ void clusterCommand(client *c) {
             addReplyError(c,"I tried hard but I can't forget myself...");
             return;
         } else if (nodeIsSlave(myself) && myself->slaveof == n) {
+        	// redis-trib.rb delnode依赖forget, 在执行forget之前,
+        	// 如果当前节点是master节点, 那么会先把自己的slaves迁移到别的master(尝试寻找持有最少的slave的master)
             addReplyError(c,"Can't forget my master!");
             return;
         }
