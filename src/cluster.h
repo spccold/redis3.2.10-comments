@@ -93,7 +93,7 @@ typedef struct clusterNode {
     int flags;      /* CLUSTER_NODE_... */
     // 当前节点的configEpoch
     uint64_t configEpoch; /* Last configEpoch observed for this node */
-    // 当前节点持有哪些slots(按bitmap方式存放, 每个byte可以保存8个slots)
+    // 当前节点持有哪些slots(按bitmap方式存放, 每个byte可以保存8个slots, slave节点不持有slots)
     unsigned char slots[CLUSTER_SLOTS/8]; /* slots handled by this node */
     // 当前节点持有多少个slots
     int numslots;   /* Number of slots handled by this node */
@@ -133,9 +133,9 @@ typedef struct clusterState {
     dict *nodes_black_list; /* Nodes we don't re-add for a few seconds. */
     clusterNode *migrating_slots_to[CLUSTER_SLOTS];
     clusterNode *importing_slots_from[CLUSTER_SLOTS];
-    // 每个slot以及对应它的clusterNode
+    // 每个slot以及对应它的clusterNode(所有的master节点)
     clusterNode *slots[CLUSTER_SLOTS];
-    // zset数据结构, slot对应到score, key对应到member
+    // slot和属于当前slot的keys的映射(zset数据结构, slot对应到score, key对应到member)
     zskiplist *slots_to_keys;
     /* The following fields are used to take the slave state on elections. */
     mstime_t failover_auth_time; /* Time of previous or next election. */

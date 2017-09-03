@@ -983,7 +983,9 @@ int clusterBumpConfigEpochWithoutConsensus(void) {
     if (myself->configEpoch == 0 ||
         myself->configEpoch != maxEpoch)
     {
+    	// 先自增currentEpoch
         server.cluster->currentEpoch++;
+        // 再赋值currentEpoch给configEpoch
         myself->configEpoch = server.cluster->currentEpoch;
         clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG|
                              CLUSTER_TODO_FSYNC_CONFIG);
@@ -3695,6 +3697,7 @@ int verifyClusterConfigWithData(void) {
  * If this node is currently a master, it is turned into a slave. */
 void clusterSetMaster(clusterNode *n) {
     serverAssert(n != myself);
+    // master节点的slots已经迁移完毕, 或者是slave节点, slave节点不持有slots
     serverAssert(myself->numslots == 0);
 
     if (nodeIsMaster(myself)) {
@@ -4087,6 +4090,7 @@ void clusterCommand(client *c) {
             }
             /* If this hash slot was served by 'myself' before to switch
              * make sure there are no longer local keys for this hash slot. */
+            // slot由当前节点持有, 现在要改变当前slot的owner, 要确定当前slot不存在任何的key
             if (server.cluster->slots[slot] == myself && n != myself) {
                 if (countKeysInSlot(slot) != 0) {
                     addReplyErrorFormat(c,
@@ -5153,8 +5157,7 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
                             *error_code = CLUSTER_REDIR_CROSS_SLOT;
                         return NULL;
                     } else {
-                        /* Flag this request as one with multiple different
-                         * keys. */
+                        /* Flag this request as one with multiple different keys. */
                         multiple_keys = 1;
                     }
                 }
@@ -5163,7 +5166,7 @@ clusterNode *getNodeByQuery(client *c, struct redisCommand *cmd, robj **argv, in
             /* Migrating / Importing slot? Count keys we don't have. */
             if ((migrating_slot || importing_slot) &&
                 lookupKeyRead(&server.db[0],thiskey) == NULL)
-            {
+            {// 只有在执行多个key的command时才考虑key丢失问题
                 missing_keys++;
             }
         }

@@ -24,11 +24,14 @@
 require 'rubygems'
 require 'redis'
 
+# 大写字母开头：常数（Constant）
 ClusterHashSlots = 16384
 MigrateDefaultTimeout = 60000
 MigrateDefaultPipeline = 10
 RebalanceDefaultThreshold = 2
 
+# $开头：全局变量(Global variable)
+# 默认不开启verbose
 $verbose = false
 
 def xputs(s)
@@ -54,24 +57,56 @@ def xputs(s)
     print "\n"
 end
 
+# 一个ClusterNode有如下信息
+#
+# @info[:host]
+# @info[:port]
+# @info[:slots], Hash type, slot => :new
+# @info[:migrating], Hash type, slot和目标nodeid的映射关系
+# @info[:importing], Hash type, slot和源nodeid的映射关系
+# @info[:replicate], 如果是slave节点则是对应的master nodeid， 否则为false(动态类型)
+# 下面的信息来自于 cluster nodes 命令
+# @info[:name], 节点id
+# @info[:addr], 该节点的地址(ip:port)
+# @info[:flags], Array type, 当前节点的flags
+# @info[:ping_sent], 是否存在pending的PING
+# @info[:ping_recv], 最后一次收的PONG的时间
+# @info[:link_status]
+# 下面的信息来自于 cluster info 命令, 除了cluster_state是字符, 其它都为数字类型
+# @info[:cluster_state], 例如: ok
+# @info[:cluster_slots_assigned], 例如: 16384
+# @info[:cluster_slots_ok], 例如: 16384
+# @info[:cluster_slots_pfail], 例如: 0
+# @info[:cluster_slots_fail], 例如: 0
+# @info[:cluster_known_nodes], 例如: 6
+# @info[:cluster_size], 例如: 3
+# @info[:cluster_current_epoch], 例如: 11
+# @info[:cluster_my_epoch], 例如: 7
+# @info[:cluster_stats_messages_sent], 例如: 4633840
+# @info[:cluster_stats_messages_received], 例如: 4633835
+
 class ClusterNode
     def initialize(addr)
+        # 字符数组
         s = addr.split(":")
         if s.length < 2
            puts "Invalid IP or Port (given as #{addr}) - use IP:Port format"
            exit 1
         end
+        # array.pop: 从 array 中移除最后一个元素，并返回该元素。如果 array 为空则返回 nil。
         port = s.pop # removes port from split array
         ip = s.join(":") # if s.length > 1 here, it's IPv6, so restore address
         @r = nil
+        # hash type
         @info = {}
-        @info[:host] = ip
+        @info[:host] = ip # subscript = key
         @info[:port] = port
-        @info[:slots] = {}
-        @info[:migrating] = {}
-        @info[:importing] = {}
-        @info[:replicate] = false
+        @info[:slots] = {}  # hash type, slot => :new, :new是个什么意思?
+        @info[:migrating] = {} # hash type, slot和目标nodeid的映射关系
+        @info[:importing] = {} # hash type, slot和源nodeid的映射关系
+        @info[:replicate] = false # bool type
         @dirty = false # True if we need to flush slots info into node.
+        # array type
         @friends = []
     end
 
@@ -91,10 +126,13 @@ class ClusterNode
         "#{@info[:host]}:#{@info[:port]}"
     end
 
+    # code if condition, 即如果 conditional 为真, 则执行 code
+    # $开头：全局变量（Global variable）
     def connect(o={})
-        return if @r
+        return if @r # 如果redis实例已经存在, 那么直接返回
         print "Connecting to node #{self}: " if $verbose
         STDOUT.flush
+        # begin ... rescue ... 异常处理
         begin
             @r = Redis.new(:host => @info[:host], :port => @info[:port], :timeout => 60)
             @r.ping
@@ -107,6 +145,7 @@ class ClusterNode
     end
 
     def assert_cluster
+        # 确定当前的节点是一个cluster节点
         info = @r.info
         if !info["cluster_enabled"] || info["cluster_enabled"].to_i == 0
             xputs "[ERR] Node #{self} is not configured as a cluster node."
@@ -127,40 +166,53 @@ class ClusterNode
         nodes = @r.cluster("nodes").split("\n")
         nodes.each{|n|
             # name addr flags role ping_sent ping_recv link_status slots
-            split = n.split
+            split = n.split # 默认以空格进行分割, 返回字符数组
+            # 取分割后index:0~index:6分别赋值给name,addr,flags..., 省略link_status
             name,addr,flags,master_id,ping_sent,ping_recv,config_epoch,link_status = split[0..6]
+            # index:8一直到最后都赋值给slots字符数组
             slots = split[8..-1]
             info = {
                 :name => name,
                 :addr => addr,
-                :flags => flags.split(","),
+                :flags => flags.split(","), # Array type
                 :replicate => master_id,
                 :ping_sent => ping_sent.to_i,
                 :ping_recv => ping_recv.to_i,
                 :link_status => link_status
             }
+            # 判断当前节点是不是slave(replicate即slave)
             info[:replicate] = false if master_id == "-"
-
+            # migrating和importing只能作用于master, 信息只存在于每个master节点自己的clusterState中, 并不在集群间传递
+            # node in migrating status:
+            # myself,master - 0 0 9 connected 5001-10000 [8000->-9347a75ab6a3b1fbb3b9cb50b9b6ac8156ede293] [8001->-9347a75ab6a3b1fbb3b9cb50b9b6ac8156ede293] [9000->-9347a75ab6a3b1fbb3b9cb50b9b6ac8156ede293]
+            # node in importing status:
+            # myself,master - 0 0 8 connected 10001-16383 [8000-<-7bdb68c8c3cf4734a3c5fd6ed88f779b297f67c9] [8001-<-7bdb68c8c3cf4734a3c5fd6ed88f779b297f67c9] [9000-<-7bdb68c8c3cf4734a3c5fd6ed88f779b297f67c9]
             if info[:flags].index("myself")
                 @info = @info.merge(info)
-                @info[:slots] = {}
+                @info[:slots] = {} # Hash type
                 slots.each{|s|
+                    # 先处理migrating和importing状态
                     if s[0..0] == '['
                         if s.index("->-") # Migrating
                             slot,dst = s[1..-1].split("->-")
-                            @info[:migrating][slot.to_i] = dst
+                            @info[:migrating][slot.to_i] = dst # slot和目标nodeid(迁移)的映射关系
                         elsif s.index("-<-") # Importing
                             slot,src = s[1..-1].split("-<-")
-                            @info[:importing][slot.to_i] = src
+                            @info[:importing][slot.to_i] = src # slot和源nodeid(导入)的映射关系
                         end
+                    # 再处理正常的slots范围(可能存在多个范围)
+                    # myself,master - 0 0 9 connected 5001-8999 9001-10000
                     elsif s.index("-")
                         start,stop = s.split("-")
                         self.add_slots((start.to_i)..(stop.to_i))
+                    # 再处理正常的一个个slot(因为不连续, 以空格分隔, 可能存在多个)
+                    # master - 0 1504445812433 10 connected 9000 10001-16383
                     else
                         self.add_slots((s.to_i)..(s.to_i))
                     end
                 } if slots
                 @dirty = false
+                # 解析cluster info 到@info实例变量中, 例如cluster_state = ok, cluster_slots_assigned => 16384, cluster_my_epoch => 9 ......
                 @r.cluster("info").split("\n").each{|e|
                     k,v=e.split(":")
                     k = k.to_sym
@@ -171,6 +223,7 @@ class ClusterNode
                         @info[k] = v
                     end
                 }
+            # 把非myself节点的info放入实例变量friends数组
             elsif o[:getfriends]
                 @friends << info
             end
@@ -291,11 +344,12 @@ class ClusterNode
 end
 
 class RedisTrib
+    # @开头：实例变量（Instance variable）
     def initialize
-        @nodes = []
+        @nodes = [] # Array type, 存放集群中所有的ClusterNode
         @fix = false
         @errors = []
-        @timeout = MigrateDefaultTimeout
+        @timeout = MigrateDefaultTimeout # 把默认的60秒超时时间赋值给RedisTrib的实例变量@timeout
     end
 
     def check_arity(req_args, num_args)
@@ -820,20 +874,26 @@ class RedisTrib
             exit 1
         end
     end
-
+    # 从集群中的一个seed初始化整个集群的信息
     def load_cluster_info_from_node(nodeaddr)
         node = ClusterNode.new(nodeaddr)
         node.connect(:abort => true)
         node.assert_cluster
+        # 现获取seed节点的信息
         node.load_info(:getfriends => true)
+        # 添加seed节点
         add_node(node)
+        # 通过seed节点的cluster nodes获取其它节点的信息, 并添加到RedisTrib的@nodes实例变量中
         node.friends.each{|f|
+            # 跳过一下非法状态
             next if f[:flags].index("noaddr") ||
                     f[:flags].index("disconnected") ||
                     f[:flags].index("fail")
             fnode = ClusterNode.new(f[:addr])
             fnode.connect()
+            # 连接失败则跳过
             next if !fnode.r
+            # 加载并添加节点
             begin
                 fnode.load_info()
                 add_node(fnode)
@@ -1133,9 +1193,11 @@ class RedisTrib
     end
 
     def fix_cluster_cmd(argv,opt)
+        # 把实例变量置为true
         @fix = true
+        # 如果指定了timeout, 那么转成integer后赋值给实例变量timeout
         @timeout = opt['timeout'].to_i if opt['timeout']
-
+        # argv[0] = ip:port
         load_cluster_info_from_node(argv[0])
         check_cluster
     end
