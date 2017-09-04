@@ -65,6 +65,7 @@ end
 # @info[:migrating], Hash type, slot和目标nodeid的映射关系
 # @info[:importing], Hash type, slot和源nodeid的映射关系
 # @info[:replicate], 如果是slave节点则是对应的master nodeid， 否则为false(动态类型)
+# @info[:replicas], 当前节点的所有slave节点(如果当前节点是master)
 # 下面的信息来自于 cluster nodes 命令
 # @info[:name], 节点id
 # @info[:addr], 该节点的地址(ip:port)
@@ -323,7 +324,9 @@ class ClusterNode
         config = []
         @r.cluster("nodes").each_line{|l|
             s = l.split
+            # 排除处于migrating和importing状态的节点(这些节点不会影响slots的完整性, 即在清除这些状态前, 每个节点持有的slots不会发生变化)
             slots = s[8..-1].select {|x| x[0..0] != "["}
+            # 跳过不持有slots的master节点和slave节点
             next if slots.length == 0
             config << s[0]+":"+(slots.sort.join(","))
         }
@@ -410,6 +413,7 @@ class RedisTrib
     def check_cluster(opt={})
         xputs ">>> Performing Cluster Check (using node #{@nodes[0]})"
         show_nodes if !opt[:quiet]
+        # check整个集群下每个节点配置视图是否一致
         check_config_consistency
         check_open_slots
         check_slots_coverage
@@ -468,6 +472,7 @@ class RedisTrib
                 open_slots += n.info[:importing].keys
             end
         }
+        # 从 self 中移除重复元素。如果没有变化（也就是说，未找到重复），则返回 nil
         open_slots.uniq!
         if open_slots.length > 0
             xputs "[WARNING] The following slots are open: #{open_slots.join(",")}"
@@ -557,6 +562,7 @@ class RedisTrib
     def get_slot_owners(slot)
         owners = []
         @nodes.each{|n|
+            # 跳过slave节点
             next if n.has_flag?("slave")
             n.slots.each{|s,_|
                 owners << n if s == slot
@@ -571,6 +577,7 @@ class RedisTrib
         best = nil
         best_numkeys = 0
         @nodes.each{|n|
+            # 跳过slave节点
             next if n.has_flag?("slave")
             numkeys = n.r.cluster("countkeysinslot",slot)
             if numkeys > best_numkeys || best == nil
@@ -584,17 +591,21 @@ class RedisTrib
     # Slot 'slot' was found to be in importing or migrating state in one or
     # more nodes. This function fixes this condition by migrating keys where
     # it seems more sensible.
+    # slot处于migrating或者importing状态
     def fix_open_slot(slot)
         puts ">>> Fixing open slot #{slot}"
 
         # Try to obtain the current slot owner, according to the current
         # nodes configuration.
+        # 返回owners数组
         owners = get_slot_owners(slot)
+        # 如果owners长度为1(99.9%场景下长度都只有一个owner, 异常只会出现在非常极端的场景下)
         owner = owners[0] if owners.length == 1
 
         migrating = []
         importing = []
         @nodes.each{|n|
+            # 跳过slave节点
             next if n.has_flag? "slave"
             if n.info[:migrating][slot]
                 migrating << n
@@ -612,6 +623,7 @@ class RedisTrib
         # number of keys, among the set of migrating / importing nodes.
         if !owner
             xputs ">>> Nobody claims ownership, selecting an owner..."
+            # 在整个集群中寻找在当前的slot下拥有最多key的一个节点
             owner = get_node_with_most_keys_in_slot(@nodes,slot)
 
             # If we still don't have an owner, we can't fix it.
@@ -657,6 +669,7 @@ class RedisTrib
 
         # Case 1: The slot is in migrating state in one slot, and in
         #         importing state in 1 slot. That's trivial to address.
+        # 这种是最常见的情况, 在slot迁移的中间出现了上面的问题, 此时importing和migrating都是存在的, 继续迁移就好了
         if migrating.length == 1 && importing.length == 1
             move_slot(migrating[0],importing[0],slot,:dots=>true,:fix=>true)
         # Case 2: There are multiple nodes that claim the slot as importing,
@@ -666,6 +679,7 @@ class RedisTrib
         elsif migrating.length == 0 && importing.length > 0
             xputs ">>> Moving all the #{slot} slot keys to its owner #{owner}"
             importing.each {|node|
+                # 跳过owner节点
                 next if node == owner
                 move_slot(node,owner,slot,:dots=>true,:fix=>true,:cold=>true)
                 xputs ">>> Setting #{slot} as STABLE in #{node}"
@@ -696,6 +710,7 @@ class RedisTrib
         @nodes.each{|n|
             signatures << n.get_config_signature
         }
+        # == 1, 说明整个集群下每个节点的配置在自己的视图下都是正常的
         return signatures.uniq.length == 1
     end
 
@@ -901,6 +916,7 @@ class RedisTrib
                 xputs "[ERR] Unable to load info for node #{fnode}"
             end
         }
+        # 找到每个master节点下所有的slave节点
         populate_nodes_replicas_info
     end
 
@@ -997,15 +1013,18 @@ class RedisTrib
             begin
                 source.r.client.call(["migrate",target.info[:host],target.info[:port],"",0,@timeout,:keys,*keys])
             rescue => e
+                # BUSYKEY 表明target节点已经存在这个key了(说明在迁移过程中可能出现了key在两个节点上的情况)
                 if o[:fix] && e.to_s =~ /BUSYKEY/
                     xputs "*** Target key exists. Replacing it for FIX."
+                    # 增加replace参数
                     source.r.client.call(["migrate",target.info[:host],target.info[:port],"",0,@timeout,:replace,:keys,*keys])
-                else
+                else # 不是fix过程, 或者是未识别的异常
                     puts ""
                     xputs "[ERR] Calling MIGRATE: #{e}"
                     exit 1
                 end
             end
+            # 显示key的迁移进度
             print "."*keys.length if o[:dots]
             STDOUT.flush
         end
@@ -1198,6 +1217,7 @@ class RedisTrib
         # 如果指定了timeout, 那么转成integer后赋值给实例变量timeout
         @timeout = opt['timeout'].to_i if opt['timeout']
         # argv[0] = ip:port
+        # 加载集群所有节点信息
         load_cluster_info_from_node(argv[0])
         check_cluster
     end
