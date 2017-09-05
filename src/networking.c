@@ -1333,7 +1333,7 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     c->querybuf = sdsMakeRoomFor(c->querybuf, readlen);
     nread = read(fd, c->querybuf+qblen, readlen);
     if (nread == -1) {
-        if (errno == EAGAIN) {
+        if (errno == EAGAIN) {// no input is immediately available, return EAGAIN in no_blocking
             return;
         } else {
             serverLog(LL_VERBOSE, "Reading from client: %s",strerror(errno));
@@ -1350,7 +1350,7 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     c->lastinteraction = server.unixtime;
     if (c->flags & CLIENT_MASTER) c->reploff += nread;
     server.stat_net_input_bytes += nread;
-    if (sdslen(c->querybuf) > server.client_max_querybuf_len) {
+    if (sdslen(c->querybuf) > server.client_max_querybuf_len) {// 最大1GB
         sds ci = catClientInfoString(sdsempty(),c), bytes = sdsempty();
 
         bytes = sdscatrepr(bytes,c->querybuf,64);
