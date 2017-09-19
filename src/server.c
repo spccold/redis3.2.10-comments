@@ -940,7 +940,9 @@ int clientsCronHandleTimeout(client *c, mstime_t now_ms) {
         !(c->flags & CLIENT_PUBSUB) &&   /* no timeout for Pub/Sub clients */
         (now - c->lastinteraction > server.maxidletime))
     {
-        serverLog(LL_VERBOSE,"Closing idle client");
+    	// 主动关闭客户端连接记为warning日志, 并记录对应的ip:port
+    	serverLog(LL_WARNING,"Closing idle client:%s", getClientPeerId(c));
+        //serverLog(LL_VERBOSE,"Closing idle client");
         freeClient(c);
         return 1;
     } else if (c->flags & CLIENT_BLOCKED) {
