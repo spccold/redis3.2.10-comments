@@ -682,6 +682,9 @@ unsigned long long estimateObjectIdleTime(robj *o) {
     if (lruclock >= o->lru) {
         return (lruclock - o->lru) * LRU_CLOCK_RESOLUTION;
     } else {
+    	// LRU_CLOCK_MAX 24 bits(11111111 11111111 11111111)
+    	// 如果lruclock < o->lru, 说明lruclock已经'溢出', 将重头开始计算clock, 例如o->lru为 11111111 11111111 11111110
+    	// lruclock 为 00000000 00000000 00000001
         return (lruclock + (LRU_CLOCK_MAX - o->lru)) *
                     LRU_CLOCK_RESOLUTION;
     }
