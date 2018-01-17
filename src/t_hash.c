@@ -201,6 +201,7 @@ int hashTypeSet(robj *o, robj *field, robj *value) {
         zl = o->ptr;
         fptr = ziplistIndex(zl, ZIPLIST_HEAD);
         if (fptr != NULL) {
+        	// 跳过value字段(field, value都是ziplist的一项)
             fptr = ziplistFind(fptr, field->ptr, sdslen(field->ptr), 1);
             if (fptr != NULL) {
                 /* Grab pointer to the value (fptr points to the field) */

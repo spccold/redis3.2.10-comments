@@ -142,6 +142,7 @@
 #define ZIPLIST_BYTES(zl)       (*((uint32_t*)(zl)))
 #define ZIPLIST_TAIL_OFFSET(zl) (*((uint32_t*)((zl)+sizeof(uint32_t))))
 #define ZIPLIST_LENGTH(zl)      (*((uint16_t*)((zl)+sizeof(uint32_t)*2)))
+// <zlbytes><zltail><zllen>
 #define ZIPLIST_HEADER_SIZE     (sizeof(uint32_t)*2+sizeof(uint16_t))
 #define ZIPLIST_END_SIZE        (sizeof(uint8_t))
 #define ZIPLIST_ENTRY_HEAD(zl)  ((zl)+ZIPLIST_HEADER_SIZE)
@@ -599,12 +600,15 @@ unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsigned cha
         ZIP_DECODE_PREVLEN(p, prevlensize, prevlen);
     } else {
         unsigned char *ptail = ZIPLIST_ENTRY_TAIL(zl);
+        // 判断当前的ziplist是否为空
         if (ptail[0] != ZIP_END) {
+        	// 不为空, 需要插入数据到最后, 所有这里需要获取前一个元素的长度(<prevrawlen><len><data>)
             prevlen = zipRawEntryLength(ptail);
         }
     }
 
     /* See if the entry can be encoded */
+    // 尝试把string转换成integer
     if (zipTryEncoding(s,slen,&value,&encoding)) {
         /* 'encoding' is set to the appropriate integer encoding */
         reqlen = zipIntSize(encoding);
