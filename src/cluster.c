@@ -2818,7 +2818,8 @@ void clusterHandleSlaveFailover(void) {
         }
     }
 
-    /* If the previous failover attempt timedout and the retry time has
+    // 出现在第一次选举开始和选举失败,并达到下一次选举的时间要求
+    /* If the previous failover attempt timeout and the retry time has
      * elapsed, we can setup a new one. */
     if (auth_age > auth_retry_time) {
         server.cluster->failover_auth_time = mstime() +
@@ -2850,6 +2851,7 @@ void clusterHandleSlaveFailover(void) {
         return;
     }
 
+    // 在等待delay到来的过程, 业务我们的rank已经发生了变化, 测试需要重新计算发起选举的delay时间
     /* It is possible that we received more updated offsets from other
      * slaves for the same master since we computed our election delay.
      * Update the delay if our rank changed.
@@ -2870,12 +2872,14 @@ void clusterHandleSlaveFailover(void) {
         }
     }
 
+    // 还没到达delay的时间
     /* Return ASAP if we can't still start the election. */
     if (mstime() < server.cluster->failover_auth_time) {
         clusterLogCantFailover(CLUSTER_CANT_FAILOVER_WAITING_DELAY);
         return;
     }
 
+    // 在规定的auth_timeout(node_timeout * 2)没有完成选举
     /* Return ASAP if the election is too old to be valid. */
     if (auth_age > auth_timeout) {
         clusterLogCantFailover(CLUSTER_CANT_FAILOVER_EXPIRED);
@@ -2884,6 +2888,7 @@ void clusterHandleSlaveFailover(void) {
 
     /* Ask for votes if needed. */
     if (server.cluster->failover_auth_sent == 0) {
+    	// 自增currentEpoch
         server.cluster->currentEpoch++;
         server.cluster->failover_auth_epoch = server.cluster->currentEpoch;
         serverLog(LL_WARNING,"Starting a failover election for epoch %llu.",
