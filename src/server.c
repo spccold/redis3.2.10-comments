@@ -1873,7 +1873,8 @@ void resetServerStats(void) {
 
 void initServer(void) {
     int j;
-
+    // 忽略SIGHUP,会话关闭时产生
+    // 忽略SIGPIPE
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
     setupSignalHandlers();
@@ -3794,7 +3795,9 @@ void setupSignalHandlers(void) {
     sigemptyset(&act.sa_mask);
     act.sa_flags = 0;
     act.sa_handler = sigShutdownHandler;
+    // 处理SIGTERM, kill时产生
     sigaction(SIGTERM, &act, NULL);
+    // 处理SIGINT, ctrl-c时产生
     sigaction(SIGINT, &act, NULL);
 
 #ifdef HAVE_BACKTRACE
